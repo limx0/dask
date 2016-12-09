@@ -79,6 +79,8 @@ def reduction_2d_test(da_func, darr, np_func, narr, use_dtype=True,
     assert_eq(da_func(darr, keepdims=True), np_func(narr, keepdims=True))
     assert_eq(da_func(darr, axis=0), np_func(narr, axis=0))
     assert_eq(da_func(darr, axis=1), np_func(narr, axis=1))
+    assert_eq(da_func(darr, axis=-1), np_func(narr, axis=-1))
+    assert_eq(da_func(darr, axis=-2), np_func(narr, axis=-2))
     assert_eq(da_func(darr, axis=1, keepdims=True),
               np_func(narr, axis=1, keepdims=True))
     assert_eq(da_func(darr, axis=(1, 0)), np_func(narr, axis=(1, 0)))
@@ -104,6 +106,14 @@ def reduction_2d_test(da_func, darr, np_func, narr, use_dtype=True,
         assert_eq(da_func(darr, axis=1, split_every=2), np_func(narr, axis=1))
         assert_eq(da_func(darr, axis=1, keepdims=True, split_every=2),
                   np_func(narr, axis=1, keepdims=True))
+
+
+def test_reduction_errors():
+    x = da.ones((5, 5), chunks=(3, 3))
+    with pytest.raises(ValueError):
+        x.sum(axis=2)
+    with pytest.raises(ValueError):
+        x.sum(axis=-3)
 
 
 @pytest.mark.parametrize('dtype', ['f4', 'i4'])
@@ -134,8 +144,9 @@ def test_reductions_2D(dtype):
 
 
 @pytest.mark.parametrize(['dfunc', 'func'],
-        [(da.argmin, np.argmin), (da.argmax, np.argmax),
-         (da.nanargmin, np.nanargmin), (da.nanargmax, np.nanargmax)])
+                         [(da.argmin, np.argmin), (da.argmax, np.argmax),
+                          (da.nanargmin, np.nanargmin),
+                          (da.nanargmax, np.nanargmax)])
 def test_arg_reductions(dfunc, func):
     x = np.random.random((10, 10, 10))
     a = da.from_array(x, chunks=(3, 4, 5))
@@ -161,7 +172,8 @@ def test_arg_reductions(dfunc, func):
 
 
 @pytest.mark.parametrize(['dfunc', 'func'],
-         [(da.nanargmin, np.nanargmin), (da.nanargmax, np.nanargmax)])
+                         [(da.nanargmin, np.nanargmin),
+                          (da.nanargmax, np.nanargmax)])
 def test_nanarg_reductions(dfunc, func):
     x = np.random.random((10, 10, 10))
     x[5] = np.nan
@@ -222,11 +234,11 @@ def test_reductions_2D_nans():
 
 def test_moment():
     def moment(x, n, axis=None):
-        return ((x - x.mean(axis=axis, keepdims=True))**n).sum(
-                axis=axis)/np.ones_like(x).sum(axis=axis)
+        return (((x - x.mean(axis=axis, keepdims=True)) ** n).sum(axis=axis) /
+                np.ones_like(x).sum(axis=axis))
 
     # Poorly conditioned
-    x = np.array([1., 2., 3.]*10).reshape((3, 10)) + 1e8
+    x = np.array([1., 2., 3.] * 10).reshape((3, 10)) + 1e8
     a = da.from_array(x, chunks=5)
     assert_eq(a.moment(2), moment(x, 2))
     assert_eq(a.moment(3), moment(x, 3))

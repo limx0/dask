@@ -32,6 +32,9 @@ def tsqr(data, name=None, compute_svd=False):
     Singular Value Decomposition.  It requires that the input array have a
     single column of blocks, each of which fit in memory.
 
+    If blocks are of size ``(n, k)`` then this algorithm has memory use that
+    scales as ``n**2 * k * nthreads``.
+
     Parameters
     ----------
 
@@ -49,7 +52,7 @@ def tsqr(data, name=None, compute_svd=False):
     if not (data.ndim == 2 and                    # Is a matrix
             len(data.chunks[1]) == 1):         # Only one column block
         raise ValueError(
-            "Input must have the following properites:\n"
+            "Input must have the following properties:\n"
             "  1. Have two dimensions\n"
             "  2. Have only one column of blocks")
 
@@ -169,7 +172,7 @@ def tsqr(data, name=None, compute_svd=False):
 
         u = Array(dsk_u, name_u_st4, shape=data.shape, chunks=data.chunks,
                   dtype=uu.dtype)
-        s = Array(dsk_s, name_s_st2, shape=(n,), chunks=(n, n), dtype=ss.dtype)
+        s = Array(dsk_s, name_s_st2, shape=(n,), chunks=(n,), dtype=ss.dtype)
         v = Array(dsk_v, name_v_st2, shape=(n, n), chunks=(n, n),
                   dtype=vv.dtype)
         return u, s, v
@@ -763,7 +766,7 @@ def lstsq(a, b):
                            (np.dot, (rt.name, 0, 0), (r.name, 0, 0)))))}
     sdsk.update(rt.dask)
     _, _, _, ss = np.linalg.lstsq(np.array([[1, 0], [1, 2]], dtype=a.dtype),
-                           np.array([0, 1], dtype=b.dtype))
+                                  np.array([0, 1], dtype=b.dtype))
     s = Array(sdsk, sname, shape=(r.shape[0], ),
               chunks=r.shape[0], dtype=ss.dtype)
 

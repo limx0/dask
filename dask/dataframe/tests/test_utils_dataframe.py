@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import pandas.util.testing as tm
 import dask.dataframe as dd
-from dask.dataframe.utils import shard_df_on_index, meta_nonempty, make_meta
+from dask.dataframe.utils import (shard_df_on_index, meta_nonempty, make_meta,
+                                  raise_on_meta_error)
 
 import pytest
 
@@ -97,29 +99,44 @@ def test_meta_nonempty():
     df1 = pd.DataFrame({'A': pd.Categorical(['Alice', 'Bob', 'Carol']),
                         'B': list('abc'),
                         'C': 'bar',
-                        'D': 3.0,
-                        'E': pd.Timestamp('2016-01-01'),
-                        'F': pd.date_range('2016-01-01', periods=3,
+                        'D': np.float32(1),
+                        'E': np.int32(1),
+                        'F': pd.Timestamp('2016-01-01'),
+                        'G': pd.date_range('2016-01-01', periods=3,
                                            tz='America/New_York'),
-                        'G': pd.Timedelta('1 hours'),
-                        'H': np.void(b' ')},
-                       columns=list('DCBAHGFE'))
+                        'H': pd.Timedelta('1 hours', 'ms'),
+                        'I': np.void(b' ')},
+                       columns=list('DCBAHGFEI'))
     df2 = df1.iloc[0:0]
     df3 = meta_nonempty(df2)
     assert (df3.dtypes == df2.dtypes).all()
     assert df3['A'][0] == 'Alice'
     assert df3['B'][0] == 'foo'
     assert df3['C'][0] == 'foo'
-    assert df3['D'][0] == 1.0
-    assert df3['E'][0] == pd.Timestamp('1970-01-01 00:00:00')
-    assert df3['F'][0] == pd.Timestamp('1970-01-01 00:00:00',
+    assert df3['D'][0] == np.float32(1)
+    assert df3['D'][0].dtype == 'f4'
+    assert df3['E'][0] == np.int32(1)
+    assert df3['E'][0].dtype == 'i4'
+    assert df3['F'][0] == pd.Timestamp('1970-01-01 00:00:00')
+    assert df3['G'][0] == pd.Timestamp('1970-01-01 00:00:00',
                                        tz='America/New_York')
-    assert df3['G'][0] == pd.Timedelta('1 days')
-    assert df3['H'][0] == 'foo'
+    assert df3['H'][0] == pd.Timedelta('1', 'ms')
+    assert df3['I'][0] == 'foo'
 
     s = meta_nonempty(df2['A'])
     assert s.dtype == df2['A'].dtype
     assert (df3['A'] == s).all()
+
+
+def test_meta_duplicated():
+    df = pd.DataFrame(columns=['A', 'A', 'B'])
+    res = meta_nonempty(df)
+
+    exp = pd.DataFrame([['foo', 'foo', 'foo'],
+                        ['foo', 'foo', 'foo']],
+                       index=['a', 'b'],
+                       columns=['A', 'A', 'B'])
+    tm.assert_frame_equal(res, exp)
 
 
 def test_meta_nonempty_index():
@@ -183,3 +200,23 @@ def test_meta_nonempty_scalar():
     x = pd.Timestamp(2000, 1, 1)
     meta = meta_nonempty(x)
     assert meta is x
+
+
+def test_raise_on_meta_error():
+    try:
+        with raise_on_meta_error():
+            raise RuntimeError("Bad stuff")
+    except Exception as e:
+        assert e.args[0].startswith("Metadata inference failed.\n")
+        assert 'RuntimeError' in e.args[0]
+    else:
+        assert False, "should have errored"
+
+    try:
+        with raise_on_meta_error("myfunc"):
+            raise RuntimeError("Bad stuff")
+    except Exception as e:
+        assert e.args[0].startswith("Metadata inference failed in `myfunc`.\n")
+        assert 'RuntimeError' in e.args[0]
+    else:
+        assert False, "should have errored"

@@ -1,19 +1,19 @@
 from __future__ import absolute_import, division, print_function
 
+from collections import OrderedDict
 from functools import partial
 from hashlib import md5
 from operator import attrgetter
 import pickle
 import os
 import uuid
-import warnings
 
 from toolz import merge, groupby, curry, identity
 from toolz.functoolz import Compose
 
 from .compatibility import bind_method, unicode
 from .context import _globals
-from .utils import Dispatch, ignoring
+from .utils import Dispatch
 
 __all__ = ("Base", "compute", "normalize_token", "tokenize", "visualize")
 
@@ -60,13 +60,6 @@ class Base(object):
         """
         return visualize(self, filename=filename, format=format,
                          optimize_graph=optimize_graph, **kwargs)
-
-    def _visualize(self, filename='mydask', format=None, optimize_graph=False):
-        warn = DeprecationWarning("``_visualize`` is deprecated, use "
-                                  "``visualize`` instead.")
-        warnings.warn(warn)
-        return self.visualize(filename=filename, format=format,
-                              optimize_graph=optimize_graph)
 
     def compute(self, **kwargs):
         """Compute several dask collections at once.
@@ -159,6 +152,8 @@ def compute(*args, **kwargs):
         return args
 
     get = kwargs.pop('get', None) or _globals['get']
+    optimizations = (kwargs.pop('optimizations', None) or
+                     _globals.get('optimizations', []))
 
     if not get:
         get = variables[0]._default_get
@@ -170,9 +165,14 @@ def compute(*args, **kwargs):
 
     if kwargs.get('optimize_graph', True):
         groups = groupby(attrgetter('_optimize'), variables)
-        dsk = merge([opt(merge([v.dask for v in val]),
-                         [v._keys() for v in val], **kwargs)
-                    for opt, val in groups.items()])
+        groups = {opt: [merge([v.dask for v in val]),
+                        [v._keys() for v in val]]
+                  for opt, val in groups.items()}
+        for opt in optimizations:
+            groups = {k: [opt(dsk, keys), keys]
+                      for k, (dsk, keys) in groups.items()}
+        dsk = merge([opt(dsk, keys, **kwargs)
+                    for opt, (dsk, keys) in groups.items()])
     else:
         dsk = merge(var.dask for var in variables)
     keys = [var._keys() for var in variables]
@@ -180,8 +180,8 @@ def compute(*args, **kwargs):
 
     results_iter = iter(results)
     return tuple(a if not isinstance(a, Base)
-                   else a._finalize(next(results_iter))
-                   for a in args)
+                 else a._finalize(next(results_iter))
+                 for a in args)
 
 
 def visualize(*args, **kwargs):
@@ -249,13 +249,16 @@ def normalize_function(func):
         return (normalize_function(func.func), func.args, kws)
     else:
         try:
-            return pickle.dumps(func, protocol=0)
+            result = pickle.dumps(func, protocol=0)
+            if b'__main__' not in result:  # abort on dynamic functions
+                return result
         except:
-            try:
-                import cloudpickle
-                return cloudpickle.dumps(func, protocol=0)
-            except:
-                return str(func)
+            pass
+        try:
+            import cloudpickle
+            return cloudpickle.dumps(func, protocol=0)
+        except:
+            return str(func)
 
 
 normalize_token = Dispatch()
@@ -263,60 +266,78 @@ normalize_token.register((int, float, str, unicode, bytes, type(None), type,
                           slice),
                          identity)
 
-@partial(normalize_token.register, dict)
+
+@normalize_token.register(dict)
 def normalize_dict(d):
     return normalize_token(sorted(d.items(), key=str))
 
-@partial(normalize_token.register, (tuple, list, set))
+
+@normalize_token.register(OrderedDict)
+def normalize_ordered_dict(d):
+    return type(d).__name__, normalize_token(list(d.items()))
+
+
+@normalize_token.register((tuple, list, set))
 def normalize_seq(seq):
     return type(seq).__name__, list(map(normalize_token, seq))
 
-@partial(normalize_token.register, object)
+
+@normalize_token.register(object)
 def normalize_object(o):
     if callable(o):
         return normalize_function(o)
     else:
         return uuid.uuid4().hex
 
-@partial(normalize_token.register, Base)
+
+@normalize_token.register(Base)
 def normalize_base(b):
     return type(b).__name__, b.key
 
 
-with ignoring(ImportError):
+@normalize_token.register_lazy("pandas")
+def register_pandas():
     import pandas as pd
 
-    @partial(normalize_token.register, pd.Index)
+    @normalize_token.register(pd.Index)
     def normalize_index(ind):
         return [ind.name, normalize_token(ind.values)]
 
-    @partial(normalize_token.register, pd.Categorical)
+    @normalize_token.register(pd.Categorical)
     def normalize_categorical(cat):
         return [normalize_token(cat.codes),
                 normalize_token(cat.categories),
                 cat.ordered]
 
-    @partial(normalize_token.register, pd.Series)
+    @normalize_token.register(pd.Series)
     def normalize_series(s):
         return [s.name, s.dtype,
                 normalize_token(s._data.blocks[0].values),
                 normalize_token(s.index)]
 
-    @partial(normalize_token.register, pd.DataFrame)
+    @normalize_token.register(pd.DataFrame)
     def normalize_dataframe(df):
         data = [block.values for block in df._data.blocks]
         data += [df.columns, df.index]
         return list(map(normalize_token, data))
 
 
-with ignoring(ImportError):
+@normalize_token.register_lazy("numpy")
+def register_numpy():
     import numpy as np
-    @partial(normalize_token.register, np.ndarray)
+
+    @normalize_token.register(np.ndarray)
     def normalize_array(x):
         if not x.shape:
             return (str(x), x.dtype)
-        if hasattr(x, 'mode') and hasattr(x, 'filename'):
-            return x.filename, os.path.getmtime(x.filename), x.dtype, x.shape
+        if hasattr(x, 'mode') and getattr(x, 'filename', None):
+            if hasattr(x.base, 'ctypes'):
+                offset = (x.ctypes.get_as_parameter().value -
+                          x.base.ctypes.get_as_parameter().value)
+            else:
+                offset = 0  # root memmap's have mmap object as base
+            return (x.filename, os.path.getmtime(x.filename), x.dtype,
+                    x.shape, x.strides, offset)
         if x.dtype.hasobject:
             try:
                 data = md5('-'.join(x.flat).encode('utf-8')).hexdigest()
@@ -331,13 +352,6 @@ with ignoring(ImportError):
 
     normalize_token.register(np.dtype, repr)
     normalize_token.register(np.generic, repr)
-
-
-with ignoring(ImportError):
-    from collections import OrderedDict
-    @partial(normalize_token.register, OrderedDict)
-    def normalize_ordered_dict(d):
-        return type(d).__name__, normalize_token(list(d.items()))
 
 
 def tokenize(*args, **kwargs):

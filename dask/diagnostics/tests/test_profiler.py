@@ -126,12 +126,14 @@ def test_cache_profiler():
     assert cprof.results == []
 
     tics = [0]
+
     def nbytes(res):
         tics[0] += 1
         return tics[0]
 
     with CacheProfiler(nbytes) as cprof:
         get(dsk2, 'c')
+
     results = cprof.results
     assert tics[-1] == len(results)
     assert tics[-1] == results[-1].metric
@@ -164,13 +166,15 @@ def test_pprint_task():
 
     assert len(pprint_task((sum, list(keys) * 100), keys)) < 100
     assert pprint_task((sum, list(keys) * 100), keys) == 'sum([_, _, _, ...])'
-    assert pprint_task((sum, [1, 2, (sum, ['a', 4]), 5, 6] * 100), keys) == \
-            'sum([*, *, sum([_, *]), ...])'
+    assert (pprint_task((sum, [1, 2, (sum, ['a', 4]), 5, 6] * 100), keys) ==
+            'sum([*, *, sum([_, *]), ...])')
     assert pprint_task((sum, [1, 2, (sum, ['a', (sum, [1, 2, 3])]), 5, 6]),
                        keys) == 'sum([*, *, sum([_, sum(...)]), ...])'
+
     # With kwargs
     def foo(w, x, y=(), z=3):
         return w + x + sum(y) + z
+
     task = (apply, foo, (tuple, ['a', 'b']),
             (dict, [['y', ['a', 'b']], ['z', 'c']]))
     assert pprint_task(task, keys) == 'foo(_, _, y=[_, _], z=_)'
@@ -283,17 +287,26 @@ def test_saves_file():
 @pytest.mark.skipif("not bokeh")
 def test_get_colors():
     from dask.diagnostics.profile_visualize import get_colors
-    from bokeh.palettes import Blues9, Blues5, BrBG3
+    from bokeh.palettes import Blues9, Blues5, Viridis
     from itertools import cycle
     funcs = list(range(11))
     cmap = get_colors('Blues', funcs)
     lk = dict(zip(funcs, cycle(Blues9)))
     assert cmap == [lk[i] for i in funcs]
+
     funcs = list(range(5))
     cmap = get_colors('Blues', funcs)
     lk = dict(zip(funcs, Blues5))
     assert cmap == [lk[i] for i in funcs]
+
     funcs = [0, 1, 0, 1, 0, 1]
     cmap = get_colors('BrBG', funcs)
-    lk = dict(zip([0, 1], BrBG3))
-    assert cmap == [lk[i] for i in funcs]
+    assert len(set(cmap)) == 2
+
+    funcs = list(range(100))
+    cmap = get_colors('Viridis', funcs)
+    assert len(set(cmap)) == 100
+
+    funcs = list(range(300))
+    cmap = get_colors('Viridis', funcs)
+    assert len(set(cmap)) == len(set(Viridis[256]))
